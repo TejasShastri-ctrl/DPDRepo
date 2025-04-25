@@ -25,7 +25,7 @@ public class ModeldataService {
     private final ModeldataVersionRepository versionRepository;
     private final ModeldataRepository modeldataRepository;
 
-    private final String uploadDirPath = "C:/Users/Tejas Shastri/MyAppUploads/uploads";
+    private final String uploadDirPath = "path/uploads";
 
     public Modeldata createNewModel(String name, MultipartFile file) throws IOException {
         Modeldata modeldata = new Modeldata();
