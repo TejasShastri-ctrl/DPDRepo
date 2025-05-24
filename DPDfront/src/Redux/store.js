@@ -5,7 +5,7 @@ import modeldataReducer from './Modeldata/ModeldataSlice';
 export const store = configureStore({
   reducer: {
     auth: authReducer,
-    modeldata: modeldataReducer,   // add modeldata reducer here
+    modeldata: modeldataReducer,
   },
   preloadedState: {
     auth: {
