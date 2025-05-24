@@ -1,15 +1,26 @@
 package com.fluidmechanics.DPD.Controllers;
 
 import lombok.RequiredArgsConstructor;
+
+import org.springframework.core.io.UrlResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import com.fluidmechanics.DPD.Models.Modeldata;
 import com.fluidmechanics.DPD.Models.Modeldataversion;
 import com.fluidmechanics.DPD.Services.ModeldataService;
 
 import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.List;
 
 @RestController
@@ -19,44 +30,141 @@ public class ModeldataController {
 
     private final ModeldataService modeldataService;
 
-    @PostMapping
-    public ResponseEntity<Modeldata> createNewModel(
+    // ! Create new model
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> createNewModel(
+            @RequestParam Long userId,
             @RequestParam String name,
-            @RequestParam MultipartFile file) throws IOException {
-        return ResponseEntity.ok(modeldataService.createNewModel(name, file));
+            @RequestParam String type,
+            @RequestParam String description,
+            @RequestPart("file") MultipartFile file) {
+        try {
+            Modeldata created = modeldataService.createNewModel(userId, name, type, description, file);
+            return ResponseEntity.status(HttpStatus.CREATED).body(created);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error creating model: " + e.getMessage());
+        }
     }
 
-    @PostMapping("/{id}/upload-version")
-    public ResponseEntity<Modeldata> uploadNewVersion(
-            @PathVariable Long id,
-            @RequestParam MultipartFile file) throws IOException {
-        return ResponseEntity.ok(modeldataService.saveNewVersion(id, file));
+    // ! Add new version to existing Modeldata with file upload
+    @PostMapping(value = "/{modeldataId}/versions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> addNewVersion(
+            @PathVariable Long modeldataId,
+            @RequestPart("file") MultipartFile file,
+            @RequestPart("description") String description) {
+        try {
+            Modeldata updatedModel = modeldataService.addNewVersion(modeldataId, file, description);
+            return ResponseEntity.ok(updatedModel);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error adding new version: " + e.getMessage());
+        }
     }
 
+    // ! Get all Modeldata
     @GetMapping
     public ResponseEntity<List<Modeldata>> getAllModeldata() {
-        return ResponseEntity.ok(modeldataService.getAllModeldata());
+        List<Modeldata> allModels = modeldataService.getAllModeldata();
+        return ResponseEntity.ok(allModels);
     }
 
+    // ! Get single Modeldata by ID
     @GetMapping("/{id}")
-    public ResponseEntity<Modeldata> getModeldata(@PathVariable Long id) {
+    public ResponseEntity<Object> getModeldata(@PathVariable Long id) {
         return modeldataService.getModeldata(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+                .<ResponseEntity<Object>>map(modeldata -> ResponseEntity.ok(modeldata))
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body("Modeldata with ID " + id + " not found"));
     }
 
+    // ! Get all versions for a specific Modeldata
     @GetMapping("/{id}/versions")
-    public ResponseEntity<List<Modeldataversion>> getVersions(@PathVariable Long id) {
-        return ResponseEntity.ok(modeldataService.getVersions(id));
+    public ResponseEntity<List<Modeldataversion>> getVersions(@PathVariable("id") Long modeldataId) {
+        List<Modeldataversion> versions = modeldataService.getVersions(modeldataId);
+        return ResponseEntity.ok(versions);
     }
 
-    // Used to be string earlier. will implement this in UI instead if I get the
-    // time
-    @PostMapping("/{id}/rollback")
-    public ResponseEntity<Modeldata> rollbackToVersion(
-            @PathVariable Long id,
-            @RequestParam int versionNumber) {
-        Modeldata rolledBack = modeldataService.rollbackToVersion(id, versionNumber);
-        return ResponseEntity.ok(rolledBack);
+    // ! Delete a Modeldata (and cascade delete versions & files)
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> deleteModeldata(@PathVariable Long id) {
+        try {
+            modeldataService.deleteModeldata(id);
+            return ResponseEntity.ok("Modeldata deleted successfully.");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+        } catch (Exception e) {
+            // Generic fallback for unexpected errors
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error deleting Modeldata: " + e.getMessage());
+        }
     }
+
+    // ! Get all Modeldata for a specific user
+    @GetMapping("/user/{userId}")
+    public ResponseEntity<?> getModeldataByUserId(@PathVariable Long userId) {
+        try {
+            List<Modeldata> userModels = modeldataService.getModeldataByUserId(userId);
+            return ResponseEntity.ok(userModels);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("User not found: " + e.getMessage());
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error fetching modeldata: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/versions/{versionId}/download")
+    public ResponseEntity<Resource> downloadVersionFile(@PathVariable Long versionId) {
+        try {
+            Modeldataversion version = modeldataService.getVersion(versionId);
+            if (version == null || version.getFilePath() == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(null);
+            }
+
+            Path filePath = Paths.get(version.getFilePath());
+            Resource resource = new UrlResource(filePath.toUri());
+
+            if (!resource.exists() || !resource.isReadable()) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(null);
+            }
+
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                            "attachment; filename=\"" + filePath.getFileName() + "\"")
+                    .body(resource);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(null);
+        }
+    }
+
+    // ! QA AND STATUS MANAGEMENT ACTIONS
+    @PutMapping("/{id}/under-scrutiny")
+    public ResponseEntity<String> markUnderScrutiny(@PathVariable Long id) {
+        modeldataService.markModeldataUnderScrutiny(id);
+        return ResponseEntity.ok("Modeldata marked as UNDER_SCRUTINY");
+    }
+
+    @PutMapping("/{id}/sent-back")
+    public ResponseEntity<String> markSentBack(@PathVariable Long id) {
+        modeldataService.markModeldataSentBack(id);
+        return ResponseEntity.ok("Modeldata marked as SENT_BACK");
+    }
+
+    @PutMapping("/{id}/approved")
+    public ResponseEntity<String> markApproved(@PathVariable Long id) {
+        modeldataService.markModeldataApproved(id);
+        return ResponseEntity.ok("Modeldata marked as APPROVED");
+    }
+
+    @GetMapping("/under-scrutiny")
+    public ResponseEntity<List<Modeldata>> getModeldataUnderScrutiny() {
+        List<Modeldata> underScrutinyModels = modeldataService.getModelsByStatus("UNDER_SCRUTINY");
+        return ResponseEntity.ok(underScrutinyModels);
+    }
+
 }

@@ -1,0 +1,8 @@
+streamlit
+pyvista
+trimesh
+pandas
+numpy
+plotly
+matplotlib
+pyyaml

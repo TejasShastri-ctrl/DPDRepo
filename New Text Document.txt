@@ -1,3 +1,0 @@
-DLP solution security - check this out
-
-https://github.com/kuchuk-borom-debbarma/kuflexVCS - version control in java

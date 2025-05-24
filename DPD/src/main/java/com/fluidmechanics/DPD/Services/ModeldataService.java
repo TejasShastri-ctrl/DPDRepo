@@ -6,9 +6,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.fluidmechanics.DPD.Repos.ModeldataVersionRepository;
+import com.fluidmechanics.DPD.Repos.UserRepository;
+import com.fluidmechanics.DPD.Models.Appuser;
 import com.fluidmechanics.DPD.Models.Modeldata;
 import com.fluidmechanics.DPD.Models.Modeldataversion;
+import com.fluidmechanics.DPD.Models.Status;
+import com.fluidmechanics.DPD.Models.VersionStatus;
 import com.fluidmechanics.DPD.Repos.ModeldataRepository;
+
+import org.springframework.transaction.annotation.Transactional;
+//!! import jakarta.transaction.Transactional;
 
 import java.io.File;
 import java.io.IOException;
@@ -22,88 +29,172 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ModeldataService {
 
+    // required args constructor only initiates final fields
     private final ModeldataVersionRepository versionRepository;
     private final ModeldataRepository modeldataRepository;
+    private final UserRepository userRepository;
+    private final FileStorageService fileStorageService;
 
-    private final String uploadDirPath = "C:/Users/Tejas Shastri/MyAppUploads/uploads";
+    // Will look into cloudinary later
+    private final String uploadDir = "uploads"; // For local storage
 
-    public Modeldata createNewModel(String name, MultipartFile file) throws IOException {
+    // ! CREATE NEW MODEL
+    public Modeldata createNewModel(Long userId, String name, String type, String description, MultipartFile file)
+            throws IOException {
+        Appuser user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
         Modeldata modeldata = new Modeldata();
         modeldata.setName(name);
+        modeldata.setType(type);
+        modeldata.setDescription(description);
+        modeldata.setAppuser(user);
         modeldata.setCreatedAt(LocalDateTime.now());
         modeldata.setUpdatedAt(LocalDateTime.now());
-        modeldata.setFileType(file.getContentType());
-    
-        Modeldata savedModeldata = modeldataRepository.save(modeldata);
-        return saveNewVersion(savedModeldata.getId(), file);
+        modeldata.setStatus(Status.CREATED);
+        modeldata.setVersions(new ArrayList<>()); // Initialize versions list
+
+        // Save modeldata first to generate ID
+        Modeldata savedModel = modeldataRepository.save(modeldata);
+
+        // Add initial version
+        return addNewVersion(savedModel.getId(), file, description);
     }
 
-    public Modeldata saveNewVersion(Long modeldataId, MultipartFile file) throws IOException {
-        Optional<Modeldata> modeldataOpt = modeldataRepository.findById(modeldataId);
-        if (modeldataOpt.isEmpty()) {
-            throw new RuntimeException("Modeldata not found");
-        }
-    
-        Modeldata modeldata = modeldataOpt.get();
+    // ! ADD NEW VERSION
+    public Modeldata addNewVersion(Long modeldataId, MultipartFile file, String description) throws IOException {
+        Modeldata modeldata = modeldataRepository.findById(modeldataId)
+                .orElseThrow(() -> new IllegalArgumentException("Modeldata not found"));
 
-        File uploadDir = new File(uploadDirPath);
-        if (!uploadDir.exists()) {
-            uploadDir.mkdirs();
-        }
-    
-        int versionCount = versionRepository.countByModeldata(modeldata);
-        int newVersionNumber = versionCount + 1;
-    
-        String fileName = UUID.randomUUID() + "_" + file.getOriginalFilename();
-        String filePath = uploadDirPath + File.separator + fileName;
-    
-        File dest = new File(filePath);
-        file.transferTo(dest);
-    
-        // Create version entity
-        Modeldataversion versionEntry = new Modeldataversion();
-        versionEntry.setModeldata(modeldata);
-        versionEntry.setVersionNumber(newVersionNumber);
-        versionEntry.setFilePath(filePath);
-        versionEntry.setTimestamp(LocalDateTime.now());
-    
-        versionRepository.save(versionEntry);
-    
+        String storedFilePath = fileStorageService.storeFile(file);
+
+        int versionNumber = versionRepository.countByModeldata(modeldata) + 1;
+
+        Modeldataversion version = new Modeldataversion();
+        version.setModeldata(modeldata);
+        version.setVersionNumber(versionNumber);
+        version.setTimestamp(LocalDateTime.now());
+        version.setFilePath(storedFilePath);
+        version.setDescription(description); // <-- set description
+
+        versionRepository.save(version);
+
         if (modeldata.getVersions() == null) {
             modeldata.setVersions(new ArrayList<>());
         }
-        modeldata.getVersions().add(versionEntry);
-    
-        modeldata.setCurrentVersion(versionEntry);
-        modeldata.setUpdatedAt(LocalDateTime.now());
-    
-        return modeldataRepository.save(modeldata);
-    }
-    
-
-
-    public List<Modeldata> getAllModeldata() {
-        return modeldataRepository.findAll();
-    }
-
-    public Optional<Modeldata> getModeldata(Long id) {
-        return modeldataRepository.findById(id);
-    }
-
-    public List<Modeldataversion> getVersions(Long modeldataId) {
-        return versionRepository.findByModeldataIdOrderByVersionNumberDesc(modeldataId);
-    }
-
-    public Modeldata rollbackToVersion(Long modeldataId, int versionNumber) {
-        Modeldata modeldata = modeldataRepository.findById(modeldataId)
-                .orElseThrow(() -> new RuntimeException("Modeldata not found"));
-
-        Modeldataversion version = versionRepository.findByModeldataIdAndVersionNumber(modeldataId, versionNumber)
-                .orElseThrow(() -> new RuntimeException("Version not found"));
+        modeldata.getVersions().add(version);
 
         modeldata.setCurrentVersion(version);
         modeldata.setUpdatedAt(LocalDateTime.now());
 
         return modeldataRepository.save(modeldata);
     }
+
+    // ! DELETE MODEL DATA
+    public void deleteModeldata(Long modeldataId) {
+        Modeldata modeldata = modeldataRepository.findById(modeldataId)
+                .orElseThrow(() -> new IllegalArgumentException("Modeldata not found"));
+
+        // Delete associated version files
+        List<Modeldataversion> versions = modeldata.getVersions();
+        if (versions != null) {
+            for (Modeldataversion version : versions) {
+                String path = version.getFilePath();
+                if (path != null) {
+                    File file = new File(path);
+                    if (file.exists() && file.isFile()) {
+                        boolean deleted = file.delete();
+                        if (!deleted) {
+                            System.err.println("Warning: Failed to delete file " + path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove reference from user (optional, for JPA hygiene)
+        Appuser owner = modeldata.getAppuser();
+        if (owner != null && owner.getModeldatas() != null) {
+            owner.getModeldatas().remove(modeldata);
+            userRepository.save(owner);
+        }
+        // Cascade applied
+        modeldataRepository.delete(modeldata);
+    }
+
+    @Transactional
+    public List<Modeldata> getAllModeldata() {
+        return modeldataRepository.findAll();
+    }
+
+    @Transactional
+    public Optional<Modeldata> getModeldata(Long id) {
+        return modeldataRepository.findById(id);
+    }
+
+    @Transactional
+    public List<Modeldataversion> getVersions(Long modeldataId) {
+        return versionRepository.findByModeldataIdOrderByVersionNumberDesc(modeldataId);
+    }
+
+    @Transactional
+    public List<Modeldata> getModeldataByUserId(Long userId) {
+        Appuser user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        return modeldataRepository.findByAppuserId(userId);
+    }
+
+    @Transactional
+    public Modeldataversion getVersion(Long versionId) {
+        return versionRepository.findById(versionId)
+                .orElseThrow(() -> new IllegalArgumentException("Version not found with ID: " + versionId));
+    }
+
+    // ! QA AND STATUS MANAGEMENT ACTIONS
+    @Transactional
+    public Modeldata markModeldataUnderScrutiny(Long modeldataId) {
+        Modeldata modeldata = modeldataRepository.findById(modeldataId)
+                .orElseThrow(() -> new IllegalArgumentException("Modeldata not found with ID: " + modeldataId));
+
+        System.out.println(modeldata.getStatus() + " - current status");
+
+        modeldata.setStatus(Status.UNDER_SCRUTINY);
+        modeldata.setUpdatedAt(LocalDateTime.now());
+
+        return modeldataRepository.save(modeldata);
+    }
+
+    @Transactional
+    public Modeldata markModeldataSentBack(Long modeldataId) {
+        Modeldata modeldata = modeldataRepository.findById(modeldataId)
+                .orElseThrow(() -> new IllegalArgumentException("Modeldata not found with ID: " + modeldataId));
+
+        System.out.println(modeldata.getStatus() + " - current status");
+
+        modeldata.setStatus(Status.SENT_BACK);
+        modeldata.setUpdatedAt(LocalDateTime.now());
+
+        return modeldataRepository.save(modeldata);
+    }
+
+    @Transactional
+    public Modeldata markModeldataApproved(Long modeldataId) {
+        Modeldata modeldata = modeldataRepository.findById(modeldataId)
+                .orElseThrow(() -> new IllegalArgumentException("Modeldata not found with ID: " + modeldataId));
+
+        System.out.println(modeldata.getStatus() + " - current status");
+
+        modeldata.setStatus(Status.APPROVED);
+        modeldata.setUpdatedAt(LocalDateTime.now());
+
+        return modeldataRepository.save(modeldata);
+    }
+
+    @Transactional
+    public List<Modeldata> getModelsByStatus(String status) {
+        Status stat = Status.valueOf(status.toUpperCase());
+        return modeldataRepository.findByStatus(stat);
+    }
+
 }

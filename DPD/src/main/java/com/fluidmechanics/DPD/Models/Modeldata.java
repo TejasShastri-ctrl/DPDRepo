@@ -17,7 +17,10 @@ public class Modeldata {
     private Long id;
 
     private String name;
-    private String fileType;
+    private String type;
+
+    @Column(length = 1000)
+    private String description;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -34,4 +37,8 @@ public class Modeldata {
     @ManyToOne
     @JsonBackReference
     Appuser appuser;
+
+    @Enumerated(EnumType.STRING)
+    private Status status;
+
 }
