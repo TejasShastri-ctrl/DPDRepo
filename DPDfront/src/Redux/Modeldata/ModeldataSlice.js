@@ -1,11 +1,7 @@
-// Redux/Modeldata/modeldataSlice.js
-
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
 
 const API_URL = 'http://localhost:8080/api/modeldata';
-
-// ───────────────────────────────────────────────
 // ASYNC THUNKS
 
 // Get all Modeldata
