@@ -23,6 +23,7 @@ const ModelDataCard = ({ model, onSelect, onMarkUnderScrutiny }) => {
   };
 
   const isPushable = status !== 'APPROVED';
+  const isPushed = status == 'UNDER_SCRUTINY';
 
   return (
     <div
@@ -97,7 +98,7 @@ const ModelDataCard = ({ model, onSelect, onMarkUnderScrutiny }) => {
         </div>
       )}
 
-      {isPushable && (
+      {isPushable && !isPushed && (
         <button
           onClick={(e) => {
             e.stopPropagation();

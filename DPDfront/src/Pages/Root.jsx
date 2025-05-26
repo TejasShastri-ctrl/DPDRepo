@@ -9,6 +9,7 @@ import Allotments from './Allotments';
 import Products from './Products';
 import SignupForm from './SignUpForm';
 import AboutPage from './AboutPage';
+import STLViewer from '../ThreeD/STLViewer';
 
 function Root() {
   const user = useSelector((state) => state.auth.user);
@@ -31,6 +32,7 @@ function Root() {
             <Route path="allotments" element={<Allotments />} />
             <Route path="products" element={<Products />} />
             <Route path="about" element={<AboutPage />} />
+            <Route path="stl" element={<STLViewer/>}/>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </>
